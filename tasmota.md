@@ -8,6 +8,11 @@ PCB. Le informazioni sui GPIO e sui registri sono estratte dal firmware ufficial
 comportamento di Tasmota dalla documentazione ufficiale (pagine *Components*, *Displays*,
 *Universal Display Driver*, *Berry*, *BUILDS*) e dai binari pubblicati su `ota.tasmota.com`.
 
+**Stato (settembre 2026)**: la stessa configurazione (stessa MCU, stesso display e driver, stesso
+`display.ini`) è stata **verificata sul badge WHY2025/EMF2026** con una build TasmoCompiler
+(vedi *Build custom*); su RHC22 non è ancora stata provata sull'hardware. Le differenze attese
+sono solo i LED (AW9523B invece di WS2812, quindi solo via Berry) e GPIO5 libero.
+
 > **Attenzione concettuale**: questa è una board custom da conferenza (MCU ESP32-C3 + display +
 > LED + I2C expander), non un dispositivo "smart plug/switch" tipico di Tasmota. Flashare Tasmota
 > **sostituisce interamente** il firmware ufficiale: radar BLE, Snake, sync schedule via Wi-Fi,
@@ -56,7 +61,10 @@ Alimentazione: 2× batterie AA (README); nessun GPIO da configurare.
   `-display` e `-lvgl`, e queste **esistono solo per ESP32 classico** (`tasmota32-display.bin`,
   `tasmota32-lvgl.bin`). Su `ota.tasmota.com` per il C3 ci sono solo `tasmota32c3.bin`,
   `tasmota32c3.factory.bin` e `tasmota32c3ser-safeboot.bin`. **Per usare il display serve una
-  build personalizzata** (vedi *Build custom* più sotto).
+  build personalizzata** (vedi *Build custom* più sotto). Nella cartella *unofficial* di
+  `github.com/tasmota/install` (branch `firmware`) esiste `tasmota32c3-lvgl.factory.bin`, che
+  include uDisplay ma è compilato `USE_DISPLAY_LVGL_ONLY`: niente `DisplayText`, schermo
+  pilotabile solo da Berry/LVGL e pesante su un C3 senza PSRAM. Piano B, non piano A.
 - Con il binario stock funzionano comunque: Wi-Fi/MQTT/web UI, i **due pulsanti**, il bus
   **I2C** (`I2CScan`) e **Berry** — quindi anche i **7 LED RGB e la backlight** via script,
   che su questa board è l'unica strada in ogni caso.
@@ -71,7 +79,7 @@ Alimentazione: 2× batterie AA (README); nessun GPIO da configurare.
 
 | Hardware | Componente Tasmota | Richiede | Come si abilita |
 |---|---|---|---|
-| Button1 / Button2 (DOWN / UP) | `Button` | binario stock | Template: `Button1` (32) su GPIO8, `Button2` (33) su GPIO9; consigliato `SetOption73 1` (eventi `Button1#Action` invece di comandare un relè che non esiste) |
+| Button1 / Button2 (DOWN / UP) | `Button` | binario stock | Template: `Button1` (32) su GPIO8, `Button2` (33) su GPIO9. Senza nessun dispositivo `Power` da soli non fanno nulla di utile: `SetOption73 1` li trasforma in eventi per regole/Berry, vedi *Pulsanti* |
 | Bus I2C | `I2CScan`, accesso da Berry | binario stock | Template: `I2C SCL` (608) su GPIO0, `I2C SDA` (640) su GPIO1 |
 | Display ST7789 240×320 | Universal Display Driver (`DisplayModel 17`) + `display.ini` | **build custom** con `USE_DISPLAY` + `USE_UNIVERSAL_DISPLAY` | Template: `SPI CLK/MOSI/MISO/CS/DC` + `Display Rst` + `Option A3`; comandi `DisplayText`, `DisplayRotate`, ecc. |
 
@@ -275,6 +283,28 @@ provare `20`. Le righe `:0..:3` sono le 4 rotazioni (`DisplayRotate 0..3`), con 
 all'orientamento del firmware ufficiale; se rosso e blu risultano scambiati aggiungere `0x08`
 (BGR) ai quattro valori MADCTL.
 
+### Risoluzione e orientamento
+
+Le dimensioni in `:H` (`240,320`) descrivono il pannello **nella rotazione 0** e devono essere
+coerenti con il MADCTL della riga `:0`: il bit `MV` (`0x20`) scambia righe e colonne del
+controller, quindi i valori senza `MV` (`C0`, `00`) sono portrait 240×320 e quelli con `MV`
+(`60`, `A0`) sono landscape 320×240. Due configurazioni valide:
+
+- **portrait nativo** (quella sopra): `:H,ST7789,240,320,…` e `:0,C0,…`; per lavorare in
+  orizzontale basta `DisplayRotate 1` o `3`: uDisplay passa da solo a 320×240 e usa il MADCTL
+  di `:1`/`:3`;
+- **landscape nativo**: `:H,ST7789,320,240,…` con `:0,60,00,00,00` (oppure `A0` se risulta
+  capovolto) e le altre tre righe ruotate di conseguenza (`:1,C0`, `:2,A0`, `:3,00`).
+
+Sintomo tipico di incoerenza (segnalato sul badge WHY2025/EMF2026 dopo un cambio di
+risoluzione): la parte **destra** dello schermo resta vuota e non si aggiorna. Succede portando
+`:H` a `320,240` e lasciando `:0,C0`: il controller è ancora in modalità 240 colonne e scarta
+tutto ciò che cade oltre la colonna 239. Correggere il MADCTL (o tornare a `240,320` +
+`DisplayRotate`), poi `Restart 1`.
+
+Per la dimensione del testo non si tocca la risoluzione: `DisplaySize 1..4` oppure `[sN]` dentro
+`DisplayText`; `DisplayFont` per i font alternativi.
+
 ### Comandi di setup (console)
 
 ```
@@ -284,16 +314,31 @@ Backlog Template {"NAME":"RHC22 Badge","GPIO":[608,640,672,1024,800,6210,736,704
 Dopo il riavvio, caricare `display.ini` (e gli script Berry + `autoexec.be`) nel filesystem, poi:
 
 ```
-Backlog DisplayModel 17; DisplayMode 0; DisplayRotate 0; SetOption73 1
+Backlog DisplayModel 17; DisplayMode 0; DisplayRotate 0; SetOption73 1; SetOption1 1
 Restart 1
-DisplayText [z][x20y20]Ciao dal badge
+DisplayText [z][x20y20s2]Ciao dal badge
 I2CScan
 AwLed 0,232,11,96
 ```
 
-`SetOption73 1` scollega i pulsanti dai relè e pubblica `{"Button1":{"Action":"SINGLE"}}`
-(usabile in regole: `ON Button1#Action=SINGLE DO … ENDON`, o in Berry con `tasmota.add_rule`).
-`I2CScan` deve mostrare `0x5A` e `0x5B`.
+`I2CScan` deve mostrare `0x5A` e `0x5B`. `DisplayModel` deve rispondere `17`: se risponde
+"Unknown command" la build non contiene il display.
+
+### Pulsanti
+
+Tasmota associa `Button<n>` a `Power<n>`; su questa board non c'è nessun dispositivo `Power`
+(niente relè, niente WS2812), quindi da soli i pulsanti non fanno nulla di utile.
+`SetOption73 1` li trasforma in eventi (`{"Button1":{"Action":"SINGLE"}}`, azioni
+`SINGLE`/`DOUBLE`/`TRIPLE`/`QUAD`/`PENTA`/`HOLD`) e `SetOption1 1` evita che pressioni multiple
+entrino in WifiConfig/Reset. Gli eventi si usano in regole o, più comodo qui, in Berry per
+pilotare LED e backlight con lo script sopra (da aggiungere in coda a `aw9523_leds.be`):
+
+```berry
+tasmota.add_rule("Button2#Action=SINGLE", def () leds.all(232, 11, 96) end)   # UP: LED magenta
+tasmota.add_rule("Button1#Action=SINGLE", def () leds.all(0, 0, 0) end)       # DOWN: LED spenti
+tasmota.add_rule("Button2#Action=HOLD", def () leds.backlight(255) end)
+tasmota.add_rule("Button1#Action=HOLD", def () leds.backlight(0) end)
+```
 
 `autoexec.be` minimo:
 
@@ -303,29 +348,49 @@ load("aw9523_leds.be")
 
 ### Build custom (necessaria per il display)
 
-1. Clonare Tasmota, creare `tasmota/user_config_override.h` dal file `.sample` e aggiungere:
+**Via TasmoCompiler** (strada verificata sul badge WHY2025/EMF2026, nessuna toolchain locale):
 
-   ```c
-   #define USE_DISPLAY
-   #define USE_UNIVERSAL_DISPLAY
-   #define USE_DISPLAY_MODES1TO5   // opzionale, per DisplayMode 1..5
-   ```
+```
+docker run --rm --name tasmocompiler -p 3000:3000 benzino77/tasmocompiler
+```
 
-   Sono le stesse opzioni che il flag `-DFIRMWARE_DISPLAYS` attiva nella variante
-   `tasmota32-display` per ESP32 classico.
-2. `pio run -e tasmota32c3` → in `build_output/firmware/` si ottengono
-   `tasmota32c3.factory.bin` (flash completo da `0x0`) e `tasmota32c3.bin` (OTA).
-3. Alternativa senza toolchain: Gitpod/TasmoCompiler online selezionando target ESP32-C3 e le
-   feature display, se esposte.
+poi su `http://localhost:3000`: board **ESP32-C3**, versione *release*; nelle *Features* spuntare
+`USE_DISPLAY` e `USE_UNIVERSAL_DISPLAY` (più `USE_DISPLAY_MODES1TO5` se servono i DisplayMode
+1–5); `USE_I2C`/`USE_SPI` sono inclusi di default; **non** spuntare `USE_LVGL` né
+`USE_DISPLAY_LVGL_ONLY`. Nessun *Custom parameter* obbligatorio. In output si ottengono
+`firmware.factory.bin` (immagine completa, per il primo flash via cavo) e `firmware.bin`
+(immagine OTA, per gli aggiornamenti dal web UI), oltre a `platformio_override.ini` e
+`user_config_override.h` generati.
+
+**Via PlatformIO** (equivalente): clonare Tasmota, creare `tasmota/user_config_override.h` dal
+file `.sample` con
+
+```c
+#define USE_DISPLAY
+#define USE_UNIVERSAL_DISPLAY
+#define USE_DISPLAY_MODES1TO5   // opzionale
+```
+
+e `pio run -e tasmota32c3` → `build_output/firmware/tasmota32c3.factory.bin` e
+`tasmota32c3.bin`. Sono le stesse opzioni che `-DFIRMWARE_DISPLAYS` attiva nella variante
+`tasmota32-display` per ESP32 classico.
 
 ### Flash
 
+Primo flash (immagine *factory*, da offset `0x0`) con esptool:
+
 ```
-esptool.py --chip esp32c3 --port /dev/ttyACM0 write_flash 0x0 tasmota32c3.factory.bin
+esptool.py --chip esp32c3 --port /dev/ttyACM0 write_flash 0x0 firmware.factory.bin
 ```
 
-Se la porta non entra da sola in download mode: tenere premuto il pulsante **UP** (GPIO9) mentre
-si alimenta/resetta il badge, poi rilasciarlo.
+Sul badge WHY2025 la stessa immagine scritta con un web flasher da browser ha prodotto un
+**boot loop**, mentre con esptool funziona: usare esptool (con `--erase-all` la prima volta, se
+il dubbio è lo stato precedente della flash). Se la porta non entra da sola in download mode:
+tenere premuto il pulsante **UP** (GPIO9) mentre si alimenta/resetta il badge, poi rilasciarlo.
+
+Aggiornamenti successivi: **OTA dal web UI** (*Firmware Upgrade → Upload file* con
+`firmware.bin`), senza cavo e conservando template, Wi-Fi e filesystem (`display.ini`, script
+Berry).
 
 ### Alternativa legacy (sconsigliata): driver `DisplayModel 12`
 

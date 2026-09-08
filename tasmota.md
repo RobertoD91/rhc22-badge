@@ -8,12 +8,12 @@ PCB. Le informazioni sui GPIO e sui registri sono estratte dal firmware ufficial
 comportamento di Tasmota dalla documentazione ufficiale (pagine *Components*, *Displays*,
 *Universal Display Driver*, *Berry*, *BUILDS*) e dai binari pubblicati su `ota.tasmota.com`.
 
-**Stato (settembre 2026)**: la stessa configurazione (stessa MCU, stesso display e driver, stesso
-`display.ini`, stessi trigger `Button<x>#State` per i pulsanti) è stata **verificata sul badge
-WHY2025/EMF2026** con una build TasmoCompiler
-(vedi *Build custom*); su RHC22 non è ancora stata provata sull'hardware. Le differenze attese
-sono solo i LED (AW9523B invece di WS2812, quindi solo via Berry) e GPIO5 libero. File pronti
-nella cartella [`tasmota/`](tasmota/) del repo: `display.ini`, `aw9523_leds.be`, `autoexec.be`.
+**Stato (settembre 2026): verificato sul badge RHC22.** Con una build TasmoCompiler (vedi *Build
+custom*) funzionano display via Universal Display Driver, LED RGB e retroilluminazione via
+Berry/AW9523B, pulsanti con le regole `Button<x>#State` e la schermata di boot. File pronti nella
+cartella [`tasmota/`](tasmota/) del repo: `display.ini`, `aw9523_leds.be`, `autoexec.be`.
+Necessario `I2CDriver32 0` contro il driver MLX90614 che interroga `0x5A` (vedi *Cosa non è
+supportato*).
 
 > **Attenzione concettuale**: questa è una board custom da conferenza (MCU ESP32-C3 + display +
 > LED + I2C expander), non un dispositivo "smart plug/switch" tipico di Tasmota. Flashare Tasmota
@@ -99,10 +99,12 @@ Alimentazione: 2× batterie AA (README); nessun GPIO da configurare.
   sta pilotando correttamente**.
 - **Radar/BLE** (ricerca badge vicini), **Snake**, **sync schedule**, **web UI del badge**:
   logica applicativa, non replicabile con Tasmota stock.
-- Attenzione: alcuni driver sensore inclusi in `tasmota32` condividono gli indirizzi
-  `0x5A`/`0x5B` (es. CCS811, MLX90614). Se dopo il boot compare un sensore "fantasma" a quegli
-  indirizzi, disabilitare il driver corrispondente con `I2CDriver<n> 0` (indici nella pagina
-  *I2CDEVICES* della documentazione).
+- **Driver I2C "fantasma"** (verificato sul badge): il driver MLX90614 (indice 32, indirizzo
+  `0x5A`) scambia l'AW9523B per un termometro a infrarossi e riempie la console di
+  `mlx checksum error`. Disabilitarlo con `I2CDriver32 0` (impostazione persistente). Allo stesso
+  indirizzo rispondono anche i driver CCS811 (indice 24, `0x5A/0x5B`) e MPR121 (indice 23,
+  `0x5A..0x5D`): se la build li include e compaiono, `I2CDriver24 0` / `I2CDriver23 0`. Indici
+  nella pagina *I2CDEVICES* della documentazione.
 
 ## Cosa è raggiungibile tramite **scripting Berry**
 
@@ -237,8 +239,8 @@ anche `SPI MISO` su GPIO2.
 
 ### `display.ini` (da caricare nel filesystem: *Consoles → Manage File system*)
 
-**Verificato sul badge WHY2025/EMF2026** (stesso pannello, stesso `sdkconfig` LVGL). Copia pronta
-nel repo: [`tasmota/display.ini`](tasmota/display.ini). Descrittore uDisplay ricavato dalla
+**Verificato sul badge RHC22** (e sul WHY2025/EMF2026: stesso pannello, stesso `sdkconfig` LVGL).
+Copia pronta nel repo: [`tasmota/display.ini`](tasmota/display.ini). Descrittore uDisplay ricavato dalla
 sequenza di init del driver LVGL `st7789.c` usato dal firmware (stessi comandi e parametri;
 `36,1,C0` = orientamento del badge; `20,0` = `INVOFF`); la riga `:H` dichiara **320×240**, le
 dimensioni LVGL del firmware. Formato `:I`: `comando, numero argomenti (hex), argomenti…`; il
@@ -298,7 +300,7 @@ il pannello indirizza con il MADCTL della riga `:0`. Il riferimento è il firmwa
 LVGL a **320×240** con `MADCTL 0xC0` (identico sui badge RHC22 e WHY2025/EMF2026). Quindi:
 
 - `:H,ST7789,320,240,…` + `:0,C0,…` = rotazione 0 identica al firmware (**configurazione
-  verificata sul badge WHY2025/EMF2026**);
+  verificata su entrambi i badge**);
 - `DisplayRotate 1` o `3` → uDisplay passa a 240×320 e usa i MADCTL con bit `MV` (`A0`, `60`);
   `DisplayRotate 2` = 320×240 capovolto (`00`);
 - **sbagliato**: `:H,ST7789,240,320,…` con `C0` (la prima versione di questa guida). uDisplay
@@ -339,7 +341,7 @@ Dopo il riavvio, caricare nel filesystem i tre file della cartella `tasmota/` de
 (`display.ini`, `aw9523_leds.be`, `autoexec.be`), poi:
 
 ```
-Backlog DisplayModel 17; DisplayMode 0; DisplayRotate 0; SetOption73 1; SetOption1 1
+Backlog DisplayModel 17; DisplayMode 0; DisplayRotate 0; SetOption73 1; SetOption1 1; SetOption32 10; I2CDriver32 0
 Restart 1
 DisplayText [z][x20y20s2]Ciao dal badge
 I2CScan
@@ -357,7 +359,7 @@ Tasmota associa `Button<n>` a `Power<n>`; su questa board non c'è nessun dispos
 `{"Button<x>":{"Action":"SINGLE"}}` (azioni `SINGLE`/`DOUBLE`/`TRIPLE`/`QUAD`/`PENTA`/`HOLD`) ma
 **il trigger per regole e Berry è `Button<x>#State`** con valori numerici: `10` = singola,
 `11` = doppia, `12` = tripla, `3` = tenuto (doc *Rules*, esempio `ON button1#state=10 DO …`;
-**verificato sul badge WHY2025** con regole `Dimmer`/`Power`/`Scheme`). Un trigger
+**verificato su entrambi i badge**). Un trigger
 `Button<x>#Action=SINGLE` **non scatta**. `SetOption1 1` evita che pressioni multiple
 entrino in WifiConfig/Reset; `SetOption32 10` porta il tempo di "tenuto" da 4 s a 1 s
 (`Backlog SetOption73 1; SetOption1 1; SetOption32 10`). Gli eventi si usano in regole o, più
@@ -383,7 +385,7 @@ heap libero (stessa struttura dell'`autoexec.be` verificato sul badge WHY2025).
 
 ### Build custom (necessaria per il display)
 
-**Via TasmoCompiler** (strada verificata sul badge WHY2025/EMF2026, nessuna toolchain locale):
+**Via TasmoCompiler** (strada verificata su entrambi i badge, nessuna toolchain locale):
 
 ```
 docker run --rm --name tasmocompiler -p 3000:3000 benzino77/tasmocompiler

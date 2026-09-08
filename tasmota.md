@@ -12,7 +12,8 @@ comportamento di Tasmota dalla documentazione ufficiale (pagine *Components*, *D
 `display.ini`, stessi trigger `Button<x>#State` per i pulsanti) è stata **verificata sul badge
 WHY2025/EMF2026** con una build TasmoCompiler
 (vedi *Build custom*); su RHC22 non è ancora stata provata sull'hardware. Le differenze attese
-sono solo i LED (AW9523B invece di WS2812, quindi solo via Berry) e GPIO5 libero.
+sono solo i LED (AW9523B invece di WS2812, quindi solo via Berry) e GPIO5 libero. File pronti
+nella cartella [`tasmota/`](tasmota/) del repo: `display.ini`, `aw9523_leds.be`, `autoexec.be`.
 
 > **Attenzione concettuale**: questa è una board custom da conferenza (MCU ESP32-C3 + display +
 > LED + I2C expander), non un dispositivo "smart plug/switch" tipico di Tasmota. Flashare Tasmota
@@ -320,13 +321,22 @@ di rosso **tutta** l'area logica (se resta una fascia nera, il file caricato non
 Per la dimensione del testo non si tocca la risoluzione: `DisplaySize 1..4` oppure `[sN]` dentro
 `DisplayText`; `DisplayFont` per i font alternativi.
 
+**Storico (2024)**: un tentativo con Tasmota 14.2.0.4 usava già uDisplay (`DisplayModel 17`,
+`SPI CS`/`SPI DC` su GPIO10/GPIO4) ma con il `display.ini` d'esempio di Tasmota per pannelli
+**240×240** (`DisplayWidth`/`DisplayHeight` = 240, offset `50` nelle rotazioni): il risultato era
+la classica **banda nera**, cioè le 80 colonne non indirizzate. Inoltre il template non aveva
+I2C (`Option A3` era su GPIO0, GPIO1 vuoto), quindi i due AW9523B erano irraggiungibili: niente
+LED e nessun controllo della backlight. Il template e il `display.ini` di questa guida risolvono
+entrambe le cose.
+
 ### Comandi di setup (console)
 
 ```
 Backlog Template {"NAME":"RHC22 Badge","GPIO":[608,640,672,1024,800,6210,736,704,32,33,768,0,0,0,0,0,0,0,0,0,0,0],"FLAG":0,"BASE":1}; Module 0
 ```
 
-Dopo il riavvio, caricare `display.ini` (e gli script Berry + `autoexec.be`) nel filesystem, poi:
+Dopo il riavvio, caricare nel filesystem i tre file della cartella `tasmota/` del repo
+(`display.ini`, `aw9523_leds.be`, `autoexec.be`), poi:
 
 ```
 Backlog DisplayModel 17; DisplayMode 0; DisplayRotate 0; SetOption73 1; SetOption1 1
@@ -351,8 +361,8 @@ Tasmota associa `Button<n>` a `Power<n>`; su questa board non c'è nessun dispos
 `Button<x>#Action=SINGLE` **non scatta**. `SetOption1 1` evita che pressioni multiple
 entrino in WifiConfig/Reset; `SetOption32 10` porta il tempo di "tenuto" da 4 s a 1 s
 (`Backlog SetOption73 1; SetOption1 1; SetOption32 10`). Gli eventi si usano in regole o, più
-comodo qui, in Berry per pilotare LED e backlight con lo script sopra (da aggiungere in coda a
-`aw9523_leds.be`):
+comodo qui, in Berry per pilotare LED e backlight con lo script sopra (già incluse in
+`tasmota/aw9523_leds.be`):
 
 ```berry
 tasmota.add_rule("Button2#State=10", def () leds.all(232, 11, 96) end)   # UP singolo: LED magenta
@@ -367,11 +377,9 @@ perso; con le regole classiche il sintomo è `Rule1` che risponde `"Length":0,"R
 Controlli: premendo un tasto in console deve comparire `{"Button2":{"Action":"SINGLE"}}` e
 `SetOption73` deve rispondere `ON`.
 
-`autoexec.be` minimo:
-
-```berry
-load("aw9523_leds.be")
-```
+L'`autoexec.be` del repo carica `aw9523_leds.be` (LED, backlight, comandi `AwLed`/`AwBacklight`,
+regole dei pulsanti) e, all'arrivo della rete, disegna una schermata con IP, SSID, MAC, versione e
+heap libero (stessa struttura dell'`autoexec.be` verificato sul badge WHY2025).
 
 ### Build custom (necessaria per il display)
 

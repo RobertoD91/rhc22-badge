@@ -1,26 +1,36 @@
 # Tasmota su RHC22 Badge
 
-Questo documento descrive come far girare **Tasmota** (in alternativa al firmware ESP-IDF/LVGL
+Questa guida descrive come far girare **Tasmota** (in alternativa al firmware ESP-IDF/LVGL
 ufficiale di questo repo) sul badge RomHack Camp 2022, riusando tutto l'hardware presente sul
 PCB. Le informazioni sui GPIO e sui registri sono estratte dal firmware ufficiale
 (`main/badge/led.c`, `main/badge/led.h`, `main/badge/ui.h`, `sdkconfig.rhc22-badge`, driver LVGL
-`lvgl_esp32_drivers/lvgl_tft/st7789.c`) e dal `README.md`; i codici componente e il
+`lvgl_esp32_drivers/lvgl_tft/st7789.c`) e dal `README.md` del repo; i codici componente e il
 comportamento di Tasmota dalla documentazione ufficiale (pagine *Components*, *Displays*,
-*Universal Display Driver*, *Berry*, *BUILDS*) e dai binari pubblicati su `ota.tasmota.com`.
+*Universal Display Driver*, *Berry*, *BUILDS*, *I2CDEVICES*) e dai binari pubblicati su
+`ota.tasmota.com`.
 
 **Stato (settembre 2026): verificato sul badge RHC22.** Con una build TasmoCompiler (vedi *Build
 custom*) funzionano display via Universal Display Driver, LED RGB e retroilluminazione via
-Berry/AW9523B, pulsanti con le regole `Button<x>#State` e la schermata di boot. File pronti nella
-cartella [`tasmota/`](tasmota/) del repo: `display.ini`, `aw9523_leds.be`, `autoexec.be`.
-Necessario `I2CDriver32 0` contro il driver MLX90614 che interroga `0x5A` (vedi *Cosa non è
-supportato*).
+Berry/AW9523B, pulsanti con le regole `Button<x>#State` e la schermata di boot.
 
 > **Attenzione concettuale**: questa è una board custom da conferenza (MCU ESP32-C3 + display +
 > LED + I2C expander), non un dispositivo "smart plug/switch" tipico di Tasmota. Flashare Tasmota
 > **sostituisce interamente** il firmware ufficiale: radar BLE, Snake, sync schedule via Wi-Fi,
 > web UI del badge, ecc. andranno persi. Per tornare al firmware originale:
 > `pio run -e rhc22-badge -t upload` seguito da `pio run -e rhc22-badge -t uploadfs` (procedura
-> del README, riscrive bootloader, tabella partizioni e filesystem).
+> del README del repo, riscrive bootloader, tabella partizioni e filesystem).
+
+## File in questa cartella
+
+| File | Dove va | Cosa fa |
+|---|---|---|
+| [`display.ini`](display.ini) | filesystem del badge | descrittore uDisplay dell'ST7789 (320×240, init identica al firmware LVGL); **verificato** |
+| [`autoexec.be`](autoexec.be) | filesystem del badge | eseguito a ogni boot: carica `aw9523_leds.be` e, all'arrivo della rete, disegna una schermata con IP, SSID, MAC, versione e heap libero; **verificato** |
+| [`aw9523_leds.be`](aw9523_leds.be) | filesystem del badge | programma i due AW9523B come `led_init()` del firmware, accende la backlight, aggiunge i comandi `AwBacklight 0..255` e `AwLed id,r,g,b` e le regole dei pulsanti; **verificato** |
+| `README.md` | — | questa guida |
+
+I file si caricano da *Consoles → Manage File system* del web UI di Tasmota. Sopravvivono agli
+aggiornamenti OTA e a `Reset 1`; spariscono solo con un flash completo (`--erase-all`).
 
 ## Hardware e mappa GPIO (ESP32-C3)
 
@@ -46,7 +56,7 @@ Display: **ST7789**, 2.4", pannello 240×320 ma **pilotato dal firmware come 320
 (`CONFIG_LV_DISPLAY_ORIENTATION=0`, chiamato `PORTRAIT` nel driver → `{0xC0,0x00,0x60,0xA0}[0]`
 in `st7789.c`), 16 bit/pixel (`COLMOD 0x55`), **senza inversione colori** (`CONFIG_LV_INVERT_COLORS`
 non impostato → `INVOFF`). Quindi la rotazione 0 di Tasmota è un raster **320 di larghezza ×
-240 di altezza** con MADCTL `C0`: è ciò che fissa la riga `:H` del `display.ini` più sotto.
+240 di altezza** con MADCTL `C0`: è ciò che fissa la riga `:H` di `display.ini`.
 
 Backlight: **non è su un GPIO** dell'ESP32-C3 (`CONFIG_LV_ENABLE_BACKLIGHT_CONTROL` non
 impostato). È pilotata dai pin `P1_0..P1_3` dell'AW9523B `0x5A` in modalità LED, registri DIM
@@ -92,7 +102,8 @@ Alimentazione: 2× batterie AA (README); nessun GPIO da configurare.
 
 - **I 7 LED RGB frontali**: sono sui due AW9523B e Tasmota **non ha un driver per l'AW9523B**;
   non essendoci una catena WS2812 non c'è nemmeno un componente `WS2812` da assegnare →
-  **nessun controllo LED nativo** (`Color`, `Scheme`, `Power` non li toccano). Solo Berry.
+  **nessun controllo LED nativo** (`Color`, `Scheme`, `Power` non li toccano). Solo Berry, con
+  `aw9523_leds.be`.
 - **Backlight del display**: idem, via AW9523B. Alla partenza il chip resta nello stato di reset
   (tutti i pin in modalità GPIO, non LED): finché uno script non lo programma via I2C la
   retroilluminazione non è sotto controllo → il display può risultare **buio anche se Tasmota lo
@@ -119,6 +130,8 @@ da `autoexec.be`.
 
 ### Registri AW9523B usati dal firmware (`led_init()`)
 
+Sono gli stessi valori scritti da [`aw9523_leds.be`](aw9523_leds.be) all'avvio:
+
 | Chip | Registro | Valore | Significato |
 |---|---|---|---|
 | `0x5A`, `0x5B` | `0x11` (GCR) | `0x03` | limite corrente LED = 1/4 Imax; **non** è il "LED mode" |
@@ -141,77 +154,12 @@ LED centrale, `id 6` = LED in alto):
 | 5 | `0x5B` | `0x22` | `0x21` | `0x20` |
 | 6 | `0x5A` | `0x2E` | `0x2D` | `0x2C` |
 
-Backlight: `0x5A`, `0x20..0x23`. Script **non testato sull'hardware**, ma allineato riga per
-riga a `led.c`:
-
-```berry
-# aw9523_leds.be — 7 LED RGB + backlight via due AW9523B, tabelle riprese da main/badge/led.c
-import string
-
-class RHC22_Leds
-  var w5a, w5b, addr_tab, reg_tab
-  def init()
-    self.addr_tab = [0x5B, 0x5A, 0x5B, 0x5B, 0x5B, 0x5B, 0x5A]   # addr[id]
-    self.reg_tab  = [                                            # reg[id*3 + R/G/B]
-      [0x2D, 0x2E, 0x2F], [0x2A, 0x29, 0x28], [0x24, 0x25, 0x26],
-      [0x2A, 0x2B, 0x2C], [0x27, 0x28, 0x29], [0x22, 0x21, 0x20],
-      [0x2E, 0x2D, 0x2C]
-    ]
-    self.w5a = tasmota.wire_scan(0x5A)
-    self.w5b = tasmota.wire_scan(0x5B)
-    if self.w5a == nil || self.w5b == nil
-      print("AW9523: chip 0x5A/0x5B non trovati")
-      return
-    end
-    # identico a led_init()
-    self.w5a.write(0x5A, 0x11, 0x03, 1)
-    self.w5b.write(0x5B, 0x11, 0x03, 1)
-    self.w5a.write(0x5A, 0x12, 0x80, 1)
-    self.w5a.write(0x5A, 0x13, 0x80, 1)
-    self.w5b.write(0x5B, 0x12, 0x00, 1)
-    self.w5b.write(0x5B, 0x13, 0x08, 1)
-  end
-  def backlight(level)                     # 0..255, equivale a set_screen_led_backlight()
-    if self.w5a == nil return end
-    for reg: [0x20, 0x21, 0x22, 0x23]
-      self.w5a.write(0x5A, reg, level, 1)
-    end
-  end
-  def set_led(id, r, g, b)                 # id 0..6, valori 0..255
-    if self.w5a == nil return end
-    var addr = self.addr_tab[id]
-    var w = (addr == 0x5A) ? self.w5a : self.w5b
-    var regs = self.reg_tab[id]
-    w.write(addr, regs[0], r, 1)
-    w.write(addr, regs[1], g, 1)
-    w.write(addr, regs[2], b, 1)
-  end
-  def all(r, g, b)
-    for id: 0..6
-      self.set_led(id, r, g, b)
-    end
-  end
-end
-
-var leds = RHC22_Leds()
-leds.backlight(180)
-leds.all(0, 0, 0)
-
-# AwBacklight 0..255
-tasmota.add_cmd('AwBacklight', def (cmd, idx, payload)
-  leds.backlight(int(payload))
-  tasmota.resp_cmnd_done()
-end)
-
-# AwLed <id>,<r>,<g>,<b>   es. AwLed 0,232,11,96  (MAGENTA_SAIYAN)
-tasmota.add_cmd('AwLed', def (cmd, idx, payload)
-  var p = string.split(payload, ',')
-  leds.set_led(int(p[0]), int(p[1]), int(p[2]), int(p[3]))
-  tasmota.resp_cmnd_done()
-end)
-```
-
-Su questa base si possono ricostruire in Berry le animazioni del firmware (`flash()`,
+Backlight: `0x5A`, `0x20..0x23`. Lo script espone l'oggetto `leds` anche nella console Berry
+(`leds.all(r, g, b)`, `leds.set_led(id, r, g, b)`, `leds.backlight(0..255)`), i comandi
+`AwBacklight 0..255` e `AwLed id,r,g,b` (es. `AwLed 0,232,11,96` = `MAGENTA_SAIYAN` sul LED
+centrale) e le regole dei pulsanti descritte sotto. Dopo un semplice `Restart` i chip conservano
+i registri; dopo uno spegnimento completo no, per questo `autoexec.be` lo carica a ogni boot. Su
+questa base si possono ricostruire in Berry le animazioni del firmware (`flash()`,
 `set_completed()`) usando `tasmota.set_timer` o un driver con `every_100ms`.
 
 ## Configurazione Tasmota
@@ -237,61 +185,23 @@ Indice per indice: 0 `I2C SCL`, 1 `I2C SDA`, 2 `SPI MISO`, 3 `Display Rst`, 4 `S
 libero e non configura fisicamente il pin. Qui GPIO5 è realmente libero, quindi si può tenere
 anche `SPI MISO` su GPIO2.
 
-### `display.ini` (da caricare nel filesystem: *Consoles → Manage File system*)
+### `display.ini`
 
-**Verificato sul badge RHC22** (e sul WHY2025/EMF2026: stesso pannello, stesso `sdkconfig` LVGL).
-Copia pronta nel repo: [`tasmota/display.ini`](tasmota/display.ini). Descrittore uDisplay ricavato dalla
-sequenza di init del driver LVGL `st7789.c` usato dal firmware (stessi comandi e parametri;
-`36,1,C0` = orientamento del badge; `20,0` = `INVOFF`); la riga `:H` dichiara **320×240**, le
-dimensioni LVGL del firmware. Formato `:I`: `comando, numero argomenti (hex), argomenti…`; il
-nibble alto del contatore aggiunge una pausa (`8x` = 150 ms).
+Il file [`display.ini`](display.ini) (identico a quello del badge WHY2025/EMF2026: stesso
+pannello, stesso `sdkconfig` LVGL) è il descrittore uDisplay ricavato dalla sequenza di init del
+driver LVGL `st7789.c` usato dal firmware (stessi comandi e parametri; `36,1,C0` = orientamento
+del badge; `20,0` = `INVOFF`). Struttura:
 
-```ini
-:H,ST7789,320,240,16,SPI,1,*,*,*,*,*,*,*,40
-:S,2,1,1,0,40,20
-:I
-CF,3,00,83,30
-ED,4,64,03,12,81
-E8,3,85,01,79
-CB,5,39,2C,00,34,02
-F7,1,20
-EA,2,00,00
-C0,1,26
-C1,1,11
-C5,2,35,3E
-C7,1,BE
-36,1,C0
-3A,1,55
-20,0
-B1,2,00,1B
-F2,1,08
-26,1,01
-E0,0E,D0,00,02,07,0A,28,32,44,42,06,0E,12,14,17
-E1,0E,D0,00,02,07,0A,28,31,54,47,0E,1C,17,1B,1E
-2A,4,00,00,00,EF
-2B,4,00,00,01,3F
-B7,1,07
-B6,4,0A,82,27,00
-11,80
-29,80
-:o,28
-:O,29
-:A,2A,2B,2C
-:R,36
-:0,C0,00,00,00
-:1,A0,00,00,01
-:2,00,00,00,02
-:3,60,00,00,03
-:i,20,21
-#
-```
-
-Gli `*` nella riga `:H` prendono i pin dal template (`SPI CS`, `SPI CLK`, `SPI MOSI`, `SPI DC`,
-`Backlight` → non assegnato, `Display Rst`, `SPI MISO`). `40` = 40 MHz: se l'immagine è corrotta
-provare `20`. Le righe `:0..:3` sono le 4 rotazioni di `DisplayRotate 0..3` (0°, 90° orario,
-180°, 270°, tabella `C0/A0/00/60`): `:0` è l'orientamento del firmware (320×240), `:1`/`:3`
-danno 240×320; se rosso e blu risultano scambiati aggiungere `0x08` (BGR) ai quattro valori
-MADCTL.
+- `:H,ST7789,320,240,16,SPI,1,*,*,*,*,*,*,*,40`: nome, **320×240** (le dimensioni LVGL del
+  firmware), 16 bit/pixel, SPI hardware 1, pin presi dal template (`*` = `SPI CS`, `SPI CLK`,
+  `SPI MOSI`, `SPI DC`, `Backlight` → non assegnato, `Display Rst`, `SPI MISO`), 40 MHz (se
+  l'immagine è corrotta provare `20`);
+- `:I` … : sequenza di init, formato `comando, numero argomenti (hex), argomenti…`; il nibble
+  alto del contatore aggiunge una pausa (`8x` = 150 ms);
+- `:0..:3`: MADCTL delle 4 rotazioni di `DisplayRotate 0..3` (0°, 90° orario, 180°, 270°,
+  tabella `C0/A0/00/60`): `:0` è l'orientamento del firmware (320×240), `:1`/`:3` danno
+  240×320; se rosso e blu risultano scambiati aggiungere `0x08` (BGR) ai quattro valori;
+- `:i,20,21`: opcode di inversione off/on per `DisplayInvert`.
 
 ### Risoluzione e orientamento
 
@@ -333,12 +243,15 @@ entrambe le cose.
 
 ### Comandi di setup (console)
 
+Inserire i comandi **uno per riga** nella console e leggere la risposta di ciascuno: il campo di
+input è a riga singola, un blocco incollato su più righe viene fuso in una sola.
+
 ```
 Backlog Template {"NAME":"RHC22 Badge","GPIO":[608,640,672,1024,800,6210,736,704,32,33,768,0,0,0,0,0,0,0,0,0,0,0],"FLAG":0,"BASE":1}; Module 0
 ```
 
-Dopo il riavvio, caricare nel filesystem i tre file della cartella `tasmota/` del repo
-(`display.ini`, `aw9523_leds.be`, `autoexec.be`), poi:
+Dopo il riavvio, caricare nel filesystem i tre file di questa cartella (`display.ini`,
+`aw9523_leds.be`, `autoexec.be`), poi:
 
 ```
 Backlog DisplayModel 17; DisplayMode 0; DisplayRotate 0; SetOption73 1; SetOption1 1; SetOption32 10; I2CDriver32 0
@@ -359,29 +272,37 @@ Tasmota associa `Button<n>` a `Power<n>`; su questa board non c'è nessun dispos
 `{"Button<x>":{"Action":"SINGLE"}}` (azioni `SINGLE`/`DOUBLE`/`TRIPLE`/`QUAD`/`PENTA`/`HOLD`) ma
 **il trigger per regole e Berry è `Button<x>#State`** con valori numerici: `10` = singola,
 `11` = doppia, `12` = tripla, `3` = tenuto (doc *Rules*, esempio `ON button1#state=10 DO …`;
-**verificato su entrambi i badge**). Un trigger
-`Button<x>#Action=SINGLE` **non scatta**. `SetOption1 1` evita che pressioni multiple
-entrino in WifiConfig/Reset; `SetOption32 10` porta il tempo di "tenuto" da 4 s a 1 s
-(`Backlog SetOption73 1; SetOption1 1; SetOption32 10`). Gli eventi si usano in regole o, più
-comodo qui, in Berry per pilotare LED e backlight con lo script sopra (già incluse in
-`tasmota/aw9523_leds.be`):
+**verificato su entrambi i badge**). Un trigger `Button<x>#Action=SINGLE` **non scatta**.
+`SetOption1 1` evita che pressioni multiple entrino in WifiConfig/Reset; `SetOption32 10` porta il
+tempo di "tenuto" da 4 s a 1 s.
 
-```berry
-tasmota.add_rule("Button2#State=10", def () leds.all(232, 11, 96) end)   # UP singolo: LED magenta
-tasmota.add_rule("Button1#State=10", def () leds.all(0, 0, 0) end)       # DOWN singolo: LED spenti
-tasmota.add_rule("Button2#State=3", def () leds.backlight(255) end)      # UP tenuto
-tasmota.add_rule("Button1#State=3", def () leds.backlight(0) end)        # DOWN tenuto
-```
+Le regole stanno in `aw9523_leds.be` (`tasmota.add_rule`, nessuna `Rule1` da inserire in
+console): UP singolo → tutti i LED magenta, DOWN singolo → LED spenti, UP tenuto → backlight al
+massimo, DOWN tenuto → backlight spenta. Controlli: premendo un tasto in console deve comparire
+`{"Button2":{"Action":"SINGLE"}}` e `SetOption73` deve rispondere `ON`.
 
-Inserire i comandi **uno per riga** nella console: il campo di input è a riga singola e un
-blocco incollato su più righe viene fuso in una sola (il `Backlog` viene eseguito, il resto va
-perso; con le regole classiche il sintomo è `Rule1` che risponde `"Length":0,"Rules":""`).
-Controlli: premendo un tasto in console deve comparire `{"Button2":{"Action":"SINGLE"}}` e
-`SetOption73` deve rispondere `ON`.
+### Riepilogo di tutte le impostazioni applicate
 
-L'`autoexec.be` del repo carica `aw9523_leds.be` (LED, backlight, comandi `AwLed`/`AwBacklight`,
-regole dei pulsanti) e, all'arrivo della rete, disegna una schermata con IP, SSID, MAC, versione e
-heap libero (stessa struttura dell'`autoexec.be` verificato sul badge WHY2025).
+Tutto ciò che è stato impostato per arrivare alla configurazione verificata, con il motivo. Le
+voci "console" sono salvate nelle impostazioni Tasmota in flash (persistono al riavvio e all'OTA;
+`Reset 1` le azzera), i file stanno nel filesystem.
+
+| Dove | Impostazione | Cosa fa | Perché |
+|---|---|---|---|
+| build | `USE_DISPLAY`, `USE_UNIVERSAL_DISPLAY`, (`USE_DISPLAY_MODES1TO5`) | compila il driver display universale (e i DisplayMode 1–5) | il binario stock per C3 non ha alcun driver display |
+| console | `Template {…}` + `Module 0` | assegna i componenti ai GPIO e attiva il template | mappa hardware del badge (I2C, SPI, pulsanti) |
+| template | `Option A3` su GPIO5 | marcatore virtuale che avvia uDisplay | richiesto da uDisplay; GPIO5 è libero su questa board |
+| filesystem | `display.ini` | descrittore ST7789 320×240 con l'init del firmware | il pannello va indirizzato come 320×240 con MADCTL `C0` (era la "banda nera" del 2024) |
+| console | `DisplayModel 17` | seleziona lo Universal Display Driver | unico driver TFT rimasto in Tasmota |
+| console | `DisplayMode 0` | schermo pilotato solo da `DisplayText`/script | niente layout automatici sopra la schermata di boot |
+| console | `DisplayRotate 0` | orientamento del firmware ufficiale | |
+| console | `SetOption73 1` | pulsanti scollegati da `Power`, eventi `Button<x>#State` | non c'è nessun `Power` da comandare |
+| console | `SetOption1 1` | niente WifiConfig/Reset da pressioni multiple | evitare reset accidentali dai pulsanti |
+| console | `SetOption32 10` | pressione "tenuta" = 1 s (default 4 s) | uso pratico dell'hold |
+| console | `I2CDriver32 0` | disabilita il driver MLX90614 | interrogava l'AW9523B a `0x5A` (`mlx checksum error`) |
+| filesystem | `aw9523_leds.be` | init dei due AW9523B come `led_init()`, backlight a 180, LED spenti, comandi `AwBacklight`/`AwLed`, regole dei pulsanti | LED e backlight sono solo su I2C |
+| filesystem | `autoexec.be` | `load("aw9523_leds.be")` + schermata di boot alla connessione | eseguito a ogni avvio; gli AW9523B perdono i registri allo spegnimento |
+| flash | `firmware.factory.bin` con esptool a `0x0`; poi OTA con `firmware.bin` | primo flash e aggiornamenti | il web flasher da browser ha dato boot loop (sul WHY2025) |
 
 ### Build custom (necessaria per il display)
 
@@ -442,7 +363,9 @@ Display Driver descritto sopra.
   `SPI DC`, `Option A3`, `SPI CS` e non componenti ESP8266 (codici diversi).
 - Prima del display, verificare con `I2CScan` che entrambi gli AW9523B rispondano, poi che lo
   script Berry accenda backlight e LED: senza di esso schermo nero e LED spenti anche se
-  `DisplayText` funziona.
+  `DisplayText` funziona. Se al boot la console dice `AW9523: chip 0x5A/0x5B non trovati`,
+  l'I2C non era pronto quando è partito `autoexec.be`: rimandare il `load` con
+  `tasmota.set_timer(1000, def () load("aw9523_leds.be") end)`.
 - GPIO9 come pulsante è sicuro (stesso schema del firmware ufficiale). Lo strapping viene
   campionato al reset, prima che Tasmota parta: il livello alto lo garantisce l'hardware del
   badge, non il pull-up software del componente `Button`. Per il download mode servono GPIO9

@@ -9,7 +9,8 @@ comportamento di Tasmota dalla documentazione ufficiale (pagine *Components*, *D
 *Universal Display Driver*, *Berry*, *BUILDS*) e dai binari pubblicati su `ota.tasmota.com`.
 
 **Stato (settembre 2026)**: la stessa configurazione (stessa MCU, stesso display e driver, stesso
-`display.ini`) è stata **verificata sul badge WHY2025/EMF2026** con una build TasmoCompiler
+`display.ini`, stessi trigger `Button<x>#State` per i pulsanti) è stata **verificata sul badge
+WHY2025/EMF2026** con una build TasmoCompiler
 (vedi *Build custom*); su RHC22 non è ancora stata provata sull'hardware. Le differenze attese
 sono solo i LED (AW9523B invece di WS2812, quindi solo via Berry) e GPIO5 libero.
 
@@ -345,8 +346,9 @@ Tasmota associa `Button<n>` a `Power<n>`; su questa board non c'è nessun dispos
 `SetOption73 1` li scollega dai relè: a ogni pressione Tasmota pubblica su MQTT
 `{"Button<x>":{"Action":"SINGLE"}}` (azioni `SINGLE`/`DOUBLE`/`TRIPLE`/`QUAD`/`PENTA`/`HOLD`) ma
 **il trigger per regole e Berry è `Button<x>#State`** con valori numerici: `10` = singola,
-`11` = doppia, `12` = tripla, `3` = tenuto (doc *Rules*, esempio `ON button1#state=10 DO …`). Un
-trigger `Button<x>#Action=SINGLE` **non scatta**. `SetOption1 1` evita che pressioni multiple
+`11` = doppia, `12` = tripla, `3` = tenuto (doc *Rules*, esempio `ON button1#state=10 DO …`;
+**verificato sul badge WHY2025** con regole `Dimmer`/`Power`/`Scheme`). Un trigger
+`Button<x>#Action=SINGLE` **non scatta**. `SetOption1 1` evita che pressioni multiple
 entrino in WifiConfig/Reset; `SetOption32 10` porta il tempo di "tenuto" da 4 s a 1 s
 (`Backlog SetOption73 1; SetOption1 1; SetOption32 10`). Gli eventi si usano in regole o, più
 comodo qui, in Berry per pilotare LED e backlight con lo script sopra (da aggiungere in coda a

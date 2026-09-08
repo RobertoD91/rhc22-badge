@@ -32,17 +32,19 @@ sono solo i LED (AW9523B invece di WS2812, quindi solo via Berry) e GPIO5 libero
 | 5 | **libero** | su questa revisione i LED **non** sono WS2812 (nessun `LED_RMT_TX_GPIO` in `led.h`): GPIO5 è inutilizzato → ci va `Option A3` (vedi template) |
 | 6 | SPI **CLK** | ST7789, SPI hardware |
 | 7 | SPI **MOSI** | ST7789 |
-| 8 | **Button1** = pulsante DOWN | `ui.h`: `BUTTON_1 0x08 // DOWN`; attivo basso, pull-up interno |
-| 9 | **Button2** = pulsante UP | `ui.h`: `BUTTON_2 0x09 // UP`. ⚠️ **strapping boot-mode** ESP32-C3: tenuto premuto al reset → Joint Download Boot (già così anche col firmware ufficiale) |
+| 8 | **Button1** = pulsante DOWN | `ui.h`: `BUTTON_1 0x08 // DOWN`; attivo basso, pull-up interno. **Strapping**: per il download mode deve restare alto (pulsante rilasciato) |
+| 9 | **Button2** = pulsante UP | `ui.h`: `BUTTON_2 0x09 // UP`. ⚠️ **strapping boot-mode** ESP32-C3: tenuto premuto al reset, con GPIO8 alto → Joint Download Boot (già così anche col firmware ufficiale) |
 | 10 | SPI **CS** display | `CONFIG_LV_DISP_SPI_CS=10` |
 | 11–17 | non disponibili | riservati alla flash SPI integrata nel modulo |
 | 18/19 | USB D-/D+ | USB-Serial/JTAG nativo: il `platformio.ini` prevede `upload_port = /dev/ttyACM*` / `/dev/cu.usbmodem*`, nomi tipici di quella periferica (non di un bridge USB-UART esterno) |
 | 20/21 | UART0 RX/TX | console seriale di fallback |
 
-Display: **ST7789**, 2.4", **240×320**, SPI hardware a 16 bit/pixel (`COLMOD 0x55`). Il firmware
-lo usa in **portrait con `MADCTL = 0xC0`** (`CONFIG_LV_DISPLAY_ORIENTATION=0` →
-`{0xC0,0x00,0x60,0xA0}[0]` nel driver `st7789.c`) e **senza inversione colori**
-(`CONFIG_LV_INVERT_COLORS` non impostato → `INVOFF`). Servono per il `display.ini` più sotto.
+Display: **ST7789**, 2.4", pannello 240×320 ma **pilotato dal firmware come 320×240**
+(`CONFIG_LV_HOR_RES_MAX=320`, `CONFIG_LV_VER_RES_MAX=240`) con **`MADCTL = 0xC0`**
+(`CONFIG_LV_DISPLAY_ORIENTATION=0`, chiamato `PORTRAIT` nel driver → `{0xC0,0x00,0x60,0xA0}[0]`
+in `st7789.c`), 16 bit/pixel (`COLMOD 0x55`), **senza inversione colori** (`CONFIG_LV_INVERT_COLORS`
+non impostato → `INVOFF`). Quindi la rotazione 0 di Tasmota è un raster **320 di larghezza ×
+240 di altezza** con MADCTL `C0`: è ciò che fissa la riga `:H` del `display.ini` più sotto.
 
 Backlight: **non è su un GPIO** dell'ESP32-C3 (`CONFIG_LV_ENABLE_BACKLIGHT_CONTROL` non
 impostato). È pilotata dai pin `P1_0..P1_3` dell'AW9523B `0x5A` in modalità LED, registri DIM
@@ -82,7 +84,7 @@ Alimentazione: 2× batterie AA (README); nessun GPIO da configurare.
 |---|---|---|---|
 | Button1 / Button2 (DOWN / UP) | `Button` | binario stock | Template: `Button1` (32) su GPIO8, `Button2` (33) su GPIO9. Senza nessun dispositivo `Power` da soli non fanno nulla di utile: `SetOption73 1` li trasforma in eventi per regole/Berry, vedi *Pulsanti* |
 | Bus I2C | `I2CScan`, accesso da Berry | binario stock | Template: `I2C SCL` (608) su GPIO0, `I2C SDA` (640) su GPIO1 |
-| Display ST7789 240×320 | Universal Display Driver (`DisplayModel 17`) + `display.ini` | **build custom** con `USE_DISPLAY` + `USE_UNIVERSAL_DISPLAY` | Template: `SPI CLK/MOSI/MISO/CS/DC` + `Display Rst` + `Option A3`; comandi `DisplayText`, `DisplayRotate`, ecc. |
+| Display ST7789 (320×240 in rotazione 0) | Universal Display Driver (`DisplayModel 17`) + `display.ini` | **build custom** con `USE_DISPLAY` + `USE_UNIVERSAL_DISPLAY` | Template: `SPI CLK/MOSI/MISO/CS/DC` + `Display Rst` + `Option A3`; comandi `DisplayText`, `DisplayRotate`, ecc. |
 
 ## Cosa **non** è supportato nativamente
 
@@ -233,13 +235,15 @@ anche `SPI MISO` su GPIO2.
 
 ### `display.ini` (da caricare nel filesystem: *Consoles → Manage File system*)
 
-Descrittore uDisplay ricavato dalla sequenza di init del driver LVGL `st7789.c` usato dal
-firmware (stessi comandi e parametri; `36,1,C0` = portrait del badge; `20,0` = `INVOFF`).
-Formato `:I`: `comando, numero argomenti (hex), argomenti…`; il nibble alto del contatore
-aggiunge una pausa (`8x` = 150 ms).
+**Verificato sul badge WHY2025/EMF2026** (stesso pannello, stesso `sdkconfig` LVGL). Copia pronta
+nel repo: [`tasmota/display.ini`](tasmota/display.ini). Descrittore uDisplay ricavato dalla
+sequenza di init del driver LVGL `st7789.c` usato dal firmware (stessi comandi e parametri;
+`36,1,C0` = orientamento del badge; `20,0` = `INVOFF`); la riga `:H` dichiara **320×240**, le
+dimensioni LVGL del firmware. Formato `:I`: `comando, numero argomenti (hex), argomenti…`; il
+nibble alto del contatore aggiunge una pausa (`8x` = 150 ms).
 
 ```ini
-:H,ST7789,240,320,16,SPI,1,*,*,*,*,*,*,*,40
+:H,ST7789,320,240,16,SPI,1,*,*,*,*,*,*,*,40
 :S,2,1,1,0,40,20
 :I
 CF,3,00,83,30
@@ -281,29 +285,36 @@ B6,4,0A,82,27,00
 Gli `*` nella riga `:H` prendono i pin dal template (`SPI CS`, `SPI CLK`, `SPI MOSI`, `SPI DC`,
 `Backlight` → non assegnato, `Display Rst`, `SPI MISO`). `40` = 40 MHz: se l'immagine è corrotta
 provare `20`. Le righe `:0..:3` sono le 4 rotazioni di `DisplayRotate 0..3` (0°, 90° orario,
-180°, 270°: la stessa tabella `C0/A0/00/60` del driver Adafruit per ST7789 240×320), con `:0`
-uguale all'orientamento del firmware ufficiale; se rosso e blu risultano scambiati aggiungere
-`0x08` (BGR) ai quattro valori MADCTL.
+180°, 270°, tabella `C0/A0/00/60`): `:0` è l'orientamento del firmware (320×240), `:1`/`:3`
+danno 240×320; se rosso e blu risultano scambiati aggiungere `0x08` (BGR) ai quattro valori
+MADCTL.
 
 ### Risoluzione e orientamento
 
-Le dimensioni in `:H` (`240,320`) descrivono il pannello **nella rotazione 0** e devono essere
-coerenti con il MADCTL della riga `:0`: il bit `MV` (`0x20`) scambia righe e colonne del
-controller, quindi i valori senza `MV` (`C0`, `00`) sono portrait 240×320 e quelli con `MV`
-(`60`, `A0`) sono landscape 320×240. Due configurazioni valide:
+Le dimensioni in `:H` descrivono il raster **nella rotazione 0** e devono corrispondere a ciò che
+il pannello indirizza con il MADCTL della riga `:0`. Il riferimento è il firmware ufficiale:
+LVGL a **320×240** con `MADCTL 0xC0` (identico sui badge RHC22 e WHY2025/EMF2026). Quindi:
 
-- **portrait nativo** (quella sopra): `:H,ST7789,240,320,…` e `:0,C0,…`; per lavorare in
-  orizzontale basta `DisplayRotate 1` o `3`: uDisplay passa da solo a 320×240 e usa il MADCTL
-  di `:1`/`:3`;
-- **landscape nativo**: `:H,ST7789,320,240,…` con `:0,A0,00,00,00` (oppure `60` se risulta
-  capovolto) e le altre tre righe ruotate di conseguenza (`:1,00`, `:2,60`, `:3,C0`).
+- `:H,ST7789,320,240,…` + `:0,C0,…` = rotazione 0 identica al firmware (**configurazione
+  verificata sul badge WHY2025/EMF2026**);
+- `DisplayRotate 1` o `3` → uDisplay passa a 240×320 e usa i MADCTL con bit `MV` (`A0`, `60`);
+  `DisplayRotate 2` = 320×240 capovolto (`00`);
+- **sbagliato**: `:H,ST7789,240,320,…` con `C0` (la prima versione di questa guida). uDisplay
+  limita x a 239 mentre il pannello ne indirizza 320: la fascia **destra** dello schermo (80
+  colonne) non viene mai disegnata né aggiornata. È il sintomo osservato sul badge WHY2025.
 
-Sintomo tipico di incoerenza (segnalato sul badge WHY2025/EMF2026 dopo un cambio di
-risoluzione): la parte **destra** dello schermo resta vuota e non si aggiorna. Succede portando
-`:H` a `320,240` e lasciando `:0,C0`: il controller è ancora in modalità 240 colonne e scarta
-tutto ciò che cade oltre la colonna 239. Correggere il MADCTL (o tornare a `240,320` +
-`DisplayRotate`), poi `Restart 1`; il comando `Display` (senza parametri) riporta `Model`,
-`Width`, `Height` e `Rotate` effettivi, utile per confermare che cosa ha caricato uDisplay.
+Controlli rapidi dopo ogni modifica al file (serve `Restart 1`):
+
+```
+Display
+DisplayText [B63488z]
+DisplayText [B0z][x10y10s2]Test
+```
+
+`Display` riporta `Model 17`, `Width 320`, `Height 240` e `Rotate` effettivi; `[B63488z]` riempie
+di rosso **tutta** l'area logica (se resta una fascia nera, il file caricato non è questo);
+`[B0z]` torna al nero. Non partire dall'esempio `ST7789_display.ini` di Tasmota: è per pannelli
+240×240 con offset `50` (80 px) nelle rotazioni.
 
 Per la dimensione del testo non si tocca la risoluzione: `DisplaySize 1..4` oppure `[sN]` dentro
 `DisplayText`; `DisplayFont` per i font alternativi.
@@ -348,7 +359,10 @@ tasmota.add_rule("Button2#State=3", def () leds.backlight(255) end)      # UP te
 tasmota.add_rule("Button1#State=3", def () leds.backlight(0) end)        # DOWN tenuto
 ```
 
-Diagnosi: premendo un tasto in console deve comparire `{"Button2":{"Action":"SINGLE"}}` e
+Inserire i comandi **uno per riga** nella console: il campo di input è a riga singola e un
+blocco incollato su più righe viene fuso in una sola (il `Backlog` viene eseguito, il resto va
+perso; con le regole classiche il sintomo è `Rule1` che risponde `"Length":0,"Rules":""`).
+Controlli: premendo un tasto in console deve comparire `{"Button2":{"Action":"SINGLE"}}` e
 `SetOption73` deve rispondere `ON`.
 
 `autoexec.be` minimo:
